@@ -26,6 +26,9 @@
   <img src="assets/figure1.svg" width="800">
 </p>
 
+> [!NOTE]
+> We'll refactor the code and sharing a much simpler API soon.
+
 ## Key Results
 
 <div align="center">
@@ -37,16 +40,6 @@
 | **TTT-Discover** | **0.380876**                       | **2198 μs**                 | **1161 μs**                 | **567,062**                 | **0.71**                   |
 
 </div>
-
-## How It Works
-
-TTT-Discover continues to train an LLM on a single problem at test time. As training progresses, the model generates increasingly better solutions that ultimately surpass prior art.
-
-```
-θ₀ → θ₁ → θ₂ → ... → θₙ
- ↓    ↓    ↓         ↓
-π₀   π₁   π₂   ...  πₙ  (improving solution distributions)
-```
 
 ## Installation
 
