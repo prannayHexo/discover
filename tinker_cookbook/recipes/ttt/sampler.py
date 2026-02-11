@@ -12,6 +12,7 @@ from tinker_cookbook.recipes.ttt.state import (
     GpuModeState,
     AleBenchState,
     ErdosState,
+    MleBenchState,
     DenoisingState,
     State,
     state_from_dict,
@@ -183,6 +184,8 @@ def create_initial_state(env_type: str, initial_exp_type: str, budget_s: int = 1
         return AleBenchState(timestep=timestep, code="", value=initial_value)
     elif env_type == "erdos":
         return ErdosState(timestep=timestep, code="", value=initial_value, c5_bound=None, construction=None)
+    elif env_type == "mle_bench":
+        return MleBenchState(timestep=timestep, code="", value=0.0, raw_score=None, medal="none")
     elif env_type == "denoising":
         from tasks.denoising.task import MAGIC_FUNC
         return DenoisingState(timestep=timestep, code=MAGIC_FUNC, value=0.24, mse=0.2316, poisson=0.0370)
