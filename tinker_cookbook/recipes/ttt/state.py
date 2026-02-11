@@ -242,6 +242,55 @@ class ErdosState(State):
         )
 
 
+class MleBenchState(State):
+    """State for MLE-Bench (Kaggle competitions) - holds code and grading info."""
+    code: str
+    raw_score: float  # raw competition score from grader
+    is_lower_better: bool  # whether lower score is better for this competition
+    medal: str  # "gold", "silver", "bronze", "above_median", "below_median", or "none"
+
+    def __init__(self, timestep: int, code: str, value: float = None,
+                 raw_score: float = None, is_lower_better: bool = False,
+                 medal: str = "none",
+                 parent_values: list[float] = None, parents: list[dict] = None,
+                 id: str = None, observation: str = ""):
+        super().__init__(timestep, value, parent_values, parents, id, observation)
+        self.code = code
+        self.raw_score = raw_score
+        self.is_lower_better = is_lower_better
+        self.medal = medal
+
+    def to_dict(self) -> dict:
+        return {
+            "type": "MleBenchState",
+            "id": self.id,
+            "timestep": self.timestep,
+            "value": self.value,
+            "parent_values": self.parent_values,
+            "parents": self.parents,
+            "observation": self.observation,
+            "code": self.code,
+            "raw_score": self.raw_score,
+            "is_lower_better": self.is_lower_better,
+            "medal": self.medal,
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "MleBenchState":
+        return cls(
+            timestep=d["timestep"],
+            code=d["code"],
+            value=d.get("value"),
+            raw_score=d.get("raw_score"),
+            is_lower_better=d.get("is_lower_better", False),
+            medal=d.get("medal", "none"),
+            parent_values=d.get("parent_values", []),
+            parents=d.get("parents", []),
+            id=d.get("id"),
+            observation=d.get("observation", ""),
+        )
+
+
 class DenoisingState(State):
     code: str
     mse: float
@@ -289,6 +338,7 @@ STATE_REGISTRY = {
     "GpuModeState": GpuModeState,
     "AleBenchState": AleBenchState,
     "ErdosState": ErdosState,
+    "MleBenchState": MleBenchState,
     "DenoisingState": DenoisingState,
 }
 
