@@ -251,7 +251,7 @@ def main():
     parser.add_argument("--log_path", default="/tmp/discover-search", help="Log directory")
     parser.add_argument("--temperature", type=float, default=0.7, help="LLM sampling temperature")
     parser.add_argument("--max_tokens", type=int, default=16000, help="Max tokens for LLM response")
-    parser.add_argument("--wandb_project", default="tinker-cookbook", help="W&B project (set to '' to disable)")
+    parser.add_argument("--wandb_project", default="discover-ttt", help="W&B project (set to '' to disable)")
     parser.add_argument("--wandb_name", default=None, help="W&B run name")
     args = parser.parse_args()
 
