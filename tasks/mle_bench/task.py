@@ -1,13 +1,9 @@
-import tempfile
-import uuid
-import os
 from pathlib import Path
-
-import pandas as pd
+import tempfile
 
 from tasks.base_reward_task import BaseRewardTask
+from tasks.mle_bench.verifier import verify_submission, grade_submission
 from mlebench.registry import registry
-from mlebench.grade import grade_csv
 
 
 class MleBenchTask(BaseRewardTask):
@@ -22,45 +18,18 @@ class MleBenchTask(BaseRewardTask):
         return "run"
 
     def preprocess_generation(self, generation, *, step, state=None, **kwargs) -> str:
-        # Inject data paths so the LLM code can find train/test data
         public_dir = str(self.competition.public_dir)
         header = f'DATA_DIR = "{public_dir}"\n\n'
         return header + generation
 
     def get_reward(self, result) -> float:
-        # result is a pandas DataFrame (the submission)
-        df = result if isinstance(result, pd.DataFrame) else pd.DataFrame(result)
-
-        # Write to temp CSV for grade_csv (use uuid to avoid race conditions)
         tmp_dir = Path(self.log_dir) / "tmp" if self.log_dir else Path(tempfile.gettempdir())
-        tmp_dir.mkdir(parents=True, exist_ok=True)
-        csv_path = tmp_dir / f"submission_{uuid.uuid4().hex}.csv"
-        df.to_csv(csv_path, index=False)
-
-        report = grade_csv(csv_path, self.competition)
+        score, report = grade_submission(result, self.competition, tmp_dir=tmp_dir)
         self._last_report = report
-
-        # Clean up
-        csv_path.unlink(missing_ok=True)
-
-        if not report.valid_submission or report.score is None:
-            return 0.0
-
-        # Return raw score, always higher=better (like CP returns sum_radii,
-        # Erdos returns 1/c5_bound). Medal info is kept in _last_report.
-        raw_score = report.score
-        if report.is_lower_better:
-            return -raw_score
-        return raw_score
+        return score
 
     def verify(self, result, *, step, **kwargs) -> bool:
-        if result is None:
-            return False
-        if isinstance(result, pd.DataFrame):
-            return len(result) > 0
-        if isinstance(result, dict):
-            return len(result) > 0
-        return False
+        return verify_submission(result)
 
 
 if __name__ == "__main__":
