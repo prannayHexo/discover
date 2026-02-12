@@ -191,6 +191,7 @@ def _write_trajectory_logs(
                         }
                     )
                 payload: dict[str, Any] = {
+                    "timestamp": time.time(),
                     "tags": tags,
                     "trajectory_index": traj_idx,
                     "final_reward": final_reward,
@@ -468,6 +469,9 @@ class Config:
     
     # Local model path (avoids HuggingFace API rate limits)
     local_model_path: str | None = None
+
+    # JSONL trajectory logging path (None = disabled)
+    trajectory_log_path: str | None = None
 
 
 @scope
@@ -841,6 +845,15 @@ async def do_async_training(
                 )
             sampling_client_step = i_batch + 1
             sampling_client_updated_event.set()
+
+            # Write trajectory logs to JSONL
+            _write_trajectory_logs(
+                cfg.trajectory_log_path,
+                [g.trajectory_group for g in wrapped_trajectory_groups],
+                [g.env_group_builder.logging_tags() for g in wrapped_trajectory_groups],
+                tokenizer,
+                train_step=i_batch,
+            )
 
             if hasattr(dataset, 'flush'):
                 dataset.flush(step=i_batch + 1)
@@ -1329,7 +1342,7 @@ async def do_sync_training(
                         f"gen&score_test_{i_batch}":
                             wandb.Table(
                                 columns=[
-                                    "Prompt", "Gen Sequence", "Score", "Correctness", "Gen Sequence PostProc", "Reference", "Initial Perf", "Advantage"
+                                    "Prompt", "Gen Sequence", "Score", "Correctness", "Gen Sequence PostProc", "Reference", "Initial Perf", "Raw Score", "Medal", "Advantage"
                                 ],
                                 data=table_data
                             )
@@ -1384,6 +1397,16 @@ async def do_sync_training(
             if hasattr(dataset, 'flush'):
                 dataset.flush(step=i_batch + 1)
 
+        # Write trajectory logs to JSONL
+        taglist_P = [b.logging_tags() for b in env_group_builders_P]
+        _write_trajectory_logs(
+            cfg.trajectory_log_path,
+            [tg for tg in trajectory_groups_P if tg is not None],
+            [tags for tg, tags in zip(trajectory_groups_P, taglist_P) if tg is not None],
+            tokenizer,
+            train_step=i_batch,
+        )
+
         if cfg.remove_constant_reward_groups:
             trajectory_groups_P = remove_constant_reward_groups(trajectory_groups_P)
 
@@ -1422,7 +1445,7 @@ async def do_sync_training(
                 f"gen&score_train_{i_batch}":
                     wandb.Table(
                         columns=[
-                            "Prompt", "Gen Sequence", "Score", "Correctness", "Gen Sequence PostProc", "Reference", "Initial Perf", "Advantage"
+                            "Prompt", "Gen Sequence", "Score", "Correctness", "Gen Sequence PostProc", "Reference", "Initial Perf", "Raw Score", "Medal", "Advantage"
                         ],
                         data=table_data
                     )
@@ -1439,6 +1462,11 @@ async def do_sync_training(
                     data=sampler_table_data
                 )
             }, step=i_batch)
+
+        # Track search/round_best from this batch's rewards
+        batch_rewards = [r for tg in trajectory_groups_P for r in tg.get_total_rewards()]
+        if batch_rewards:
+            metrics["search/round_best"] = max(batch_rewards)
 
         # Log metrics
         metrics.update(train_step_metrics)

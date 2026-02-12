@@ -48,10 +48,13 @@ def get_log_table(trajectory_groups_P: List[TrajectoryGroup]):
             score = traj_metrics['score']
             correct = traj_metrics['correct']
             initial_perf = traj_metrics.get('initial_performance')
+            # MLE-bench specific fields (None for other benchmarks)
+            raw_score = traj_metrics.get('raw_score')
+            medal = traj_metrics.get('medal')
             table_row_list.append(
-                (prompt, response, score, correct, grid, ref, initial_perf)
+                (prompt, response, score, correct, grid, ref, initial_perf, raw_score, medal)
             )
-    
+
     table_row_list = None if len(table_row_list) == 0 else table_row_list
 
     return table_row_list
@@ -61,7 +64,7 @@ def remove_non_numerical_field(trajectory_groups_P: List[TrajectoryGroup]):
     for i in range(len(trajectory_groups_P)):
         for j in range(len(trajectory_groups_P[i].trajectories_G)):
             traj_metrics = trajectory_groups_P[i].trajectories_G[j].transitions[0].metrics  # @xh: len(transitions) always =1?
-            for k in ['prompt_hash', 'predicted_grid', 'prompt', 'response', 'ref']:
+            for k in ['prompt_hash', 'predicted_grid', 'prompt', 'response', 'ref', 'medal']:
                 if k in traj_metrics:
                     traj_metrics.pop(k)
 
@@ -170,7 +173,7 @@ class RLTestSetEvaluator(SamplingClientEvaluator):
         async def run_group_rollout(builder, i):
             enable_logging = i < self.num_groups_to_log
             with logtree.optional_enable_logging(enable=enable_logging):
-                return await do_group_rollout(builder, policy)
+                return await do_group_rollout(builder, policy, step_idx=0)
 
         trajectory_groups_P = await asyncio.gather(
             *[run_group_rollout(builder, i) for i, builder in enumerate(env_group_builders)]

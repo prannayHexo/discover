@@ -114,6 +114,9 @@ class SingleProblemDataset(RLDataset):
             case "trimul" | "mla_decode_nvidia":
                 from tinker_cookbook.recipes.ttt.env_gpu_mode import GpuModeEnv
                 return GpuModeEnv
+            case "mle_bench":
+                from tinker_cookbook.recipes.ttt.env_mle_bench import MleBenchEnv
+                return MleBenchEnv
             case _:
                 raise ValueError(f"Unknown dataset name: {dataset_name}")
 
@@ -162,6 +165,17 @@ class SingleProblemDatasetBuilder(RLDatasetBuilder):
                 batch_size=self.config.batch_size, 
                 group_size=self.config.group_size,
             )
+        elif self.config.dataset_name == "mle_bench":
+            # For mle_bench, problem_idx is the competition_id (e.g. "spaceship-titanic")
+            return get_or_create_sampler_with_default(
+                self.config.sampler_type,
+                self.config.log_path,
+                "mle_bench",
+                initial_exp_type=self.config.initial_exp_type,
+                n=None,
+                batch_size=self.config.batch_size,
+                group_size=self.config.group_size,
+            )
         elif self.config.dataset_name == "ale_bench":
             # For ale_bench, use problem_idx (ahc039 or ahc058) as env_type
             if self.config.problem_idx not in ("ahc039", "ahc058"):
@@ -190,7 +204,7 @@ class SingleProblemDatasetBuilder(RLDatasetBuilder):
 
 # Valid dataset names
 VALID_DATASET_NAMES = {
-    "cp", "ac1", "ac2", "ale_bench", "denoising", "erdos", "trimul", "mla_decode_nvidia"
+    "cp", "ac1", "ac2", "ale_bench", "denoising", "erdos", "trimul", "mla_decode_nvidia", "mle_bench"
 }
 
 
