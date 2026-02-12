@@ -6,13 +6,37 @@ import pandas as pd
 from mlebench.grade import grade_csv
 
 
-def verify_submission(result) -> bool:
-    """Check that result is a non-empty DataFrame or dict."""
+def verify_submission(result, competition) -> bool:
+    """Structurally validate a submission against competition expectations."""
     if result is None:
         return False
-    if isinstance(result, (pd.DataFrame, dict)):
-        return len(result) > 0
-    return False
+    if not isinstance(result, (pd.DataFrame, dict)):
+        return False
+
+    df = result if isinstance(result, pd.DataFrame) else pd.DataFrame(result)
+
+    if len(df) == 0:
+        return False
+
+    # Load expected format from sample submission
+    sample = pd.read_csv(competition.sample_submission)
+
+    # Check required columns exist
+    missing = set(sample.columns) - set(df.columns)
+    if missing:
+        return False
+
+    # Check row count matches expected
+    answers = pd.read_csv(competition.answers)
+    if len(df) != len(answers):
+        return False
+
+    # Check for all-NaN in any required column
+    for col in sample.columns:
+        if df[col].isna().all():
+            return False
+
+    return True
 
 
 def grade_submission(result, competition, tmp_dir=None):

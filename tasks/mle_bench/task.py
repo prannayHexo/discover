@@ -29,7 +29,7 @@ class MleBenchTask(BaseRewardTask):
         return score
 
     def verify(self, result, *, step, **kwargs) -> bool:
-        return verify_submission(result)
+        return verify_submission(result, self.competition)
 
 
 if __name__ == "__main__":
