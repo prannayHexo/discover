@@ -53,32 +53,50 @@ def verify_mle_bench(
     task = MleBenchTask(config_ns, log_path, competition_id=competition_id)
     out = task.compute_score(generation, step=step)
 
-    # Extract grading details from the result
+    # Extract grading details from the stored report (set by get_reward)
+    report = task._last_report
     raw_score = None
     medal = "none"
     is_lower_better = False
 
-    if out["correctness"] > 0:
-        # Re-grade to get medal info (task.get_reward already graded but we need the report)
-        # The score from compute_score is already the reward (medal-based)
-        reward_val = out["score"]
-        if reward_val >= 1.0:
+    if report is not None and report.valid_submission and report.score is not None:
+        raw_score = report.score
+        is_lower_better = report.is_lower_better
+        if report.gold_medal:
             medal = "gold"
-        elif reward_val >= 0.75:
+        elif report.silver_medal:
             medal = "silver"
-        elif reward_val >= 0.5:
+        elif report.bronze_medal:
             medal = "bronze"
-        elif reward_val >= 0.25:
+        elif report.above_median:
             medal = "above_median"
         else:
             medal = "below_median"
-        raw_score = out.get("performance", 0.0)
+    elif out["correctness"] > 0 and report is not None and not report.valid_submission:
+        # verify() passed (non-empty DataFrame) but grading found it invalid
+        out["correctness"] = 0.0
+        out["score"] = 0.0
+
+    # Log full verifier results
+    if report is not None:
+        logtree.log_text(
+            f"MLE-bench result: raw_score={raw_score}, medal={medal}, "
+            f"reward={out['score']}, correctness={out['correctness']}, "
+            f"is_lower_better={is_lower_better}, valid={report.valid_submission}, "
+            f"thresholds(gold={report.gold_threshold}, silver={report.silver_threshold}, "
+            f"bronze={report.bronze_threshold}, median={report.median_threshold})"
+        )
+    else:
+        logtree.log_text(
+            f"MLE-bench result: no report (code failed), "
+            f"msg={out['msg']}, correctness={out['correctness']}"
+        )
 
     return {
         "score": out["score"],
         "msg": out["msg"],
         "correctness": out["correctness"],
-        "performance": out["score"],  # use reward as performance (higher = better)
+        "performance": out["performance"],  # from _transform_reward, like CP/denoising
         "raw_score": raw_score,
         "medal": medal,
         "is_lower_better": is_lower_better,
@@ -194,7 +212,7 @@ Start by examining the data to understand the problem, then build a model.
 
     def _compute_reward(self, outs: dict[str, Any], correctness: float) -> float:
         if correctness > 0:
-            return outs.get("performance", 0.0)
+            return outs.get("score", 0.0)
         return 0.0
 
     def _create_next_state(

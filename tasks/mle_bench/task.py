@@ -1,4 +1,5 @@
 import tempfile
+import uuid
 import os
 from pathlib import Path
 
@@ -15,6 +16,7 @@ class MleBenchTask(BaseRewardTask):
         super().__init__(config, log_path)
         self.competition_id = competition_id
         self.competition = registry.get_competition(competition_id)
+        self._last_report = None
 
     def get_function_name(self) -> str:
         return "run"
@@ -29,13 +31,14 @@ class MleBenchTask(BaseRewardTask):
         # result is a pandas DataFrame (the submission)
         df = result if isinstance(result, pd.DataFrame) else pd.DataFrame(result)
 
-        # Write to temp CSV for grade_csv
+        # Write to temp CSV for grade_csv (use uuid to avoid race conditions)
         tmp_dir = Path(self.log_dir) / "tmp" if self.log_dir else Path(tempfile.gettempdir())
         tmp_dir.mkdir(parents=True, exist_ok=True)
-        csv_path = tmp_dir / f"submission_{os.getpid()}.csv"
+        csv_path = tmp_dir / f"submission_{uuid.uuid4().hex}.csv"
         df.to_csv(csv_path, index=False)
 
         report = grade_csv(csv_path, self.competition)
+        self._last_report = report
 
         # Clean up
         csv_path.unlink(missing_ok=True)
@@ -43,18 +46,12 @@ class MleBenchTask(BaseRewardTask):
         if not report.valid_submission or report.score is None:
             return 0.0
 
-        # Normalize score: map medal thresholds to reward tiers
-        # gold=1.0, silver=0.75, bronze=0.5, above_median=0.25, else proportional
-        if report.gold_medal:
-            return 1.0
-        elif report.silver_medal:
-            return 0.75
-        elif report.bronze_medal:
-            return 0.5
-        elif report.above_median:
-            return 0.25
-        else:
-            return 0.1  # valid submission but below median
+        # Return raw score, always higher=better (like CP returns sum_radii,
+        # Erdos returns 1/c5_bound). Medal info is kept in _last_report.
+        raw_score = report.score
+        if report.is_lower_better:
+            return -raw_score
+        return raw_score
 
     def verify(self, result, *, step, **kwargs) -> bool:
         if result is None:
