@@ -1329,7 +1329,7 @@ async def do_sync_training(
                         f"gen&score_test_{i_batch}":
                             wandb.Table(
                                 columns=[
-                                    "Prompt", "Gen Sequence", "Score", "Correctness", "Gen Sequence PostProc", "Reference", "Initial Perf", "Advantage"
+                                    "Prompt", "Gen Sequence", "Score", "Correctness", "Gen Sequence PostProc", "Reference", "Initial Perf", "Raw Score", "Medal", "Advantage"
                                 ],
                                 data=table_data
                             )
@@ -1422,7 +1422,7 @@ async def do_sync_training(
                 f"gen&score_train_{i_batch}":
                     wandb.Table(
                         columns=[
-                            "Prompt", "Gen Sequence", "Score", "Correctness", "Gen Sequence PostProc", "Reference", "Initial Perf", "Advantage"
+                            "Prompt", "Gen Sequence", "Score", "Correctness", "Gen Sequence PostProc", "Reference", "Initial Perf", "Raw Score", "Medal", "Advantage"
                         ],
                         data=table_data
                     )
