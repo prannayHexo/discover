@@ -1440,6 +1440,11 @@ async def do_sync_training(
                 )
             }, step=i_batch)
 
+        # Track search/round_best from this batch's rewards
+        batch_rewards = [r for tg in trajectory_groups_P for r in tg.get_total_rewards()]
+        if batch_rewards:
+            metrics["search/round_best"] = max(batch_rewards)
+
         # Log metrics
         metrics.update(train_step_metrics)
         metrics["time/total"] = time.time() - t_start

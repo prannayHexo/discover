@@ -296,6 +296,17 @@ class GreedySampler(StateSampler):
             self._current_step = step
             self._load(step)
 
+    def get_sample_stats(self) -> dict:
+        with self._lock:
+            values = [s.value for s in self._top_states if s.value is not None]
+        if not values:
+            return {}
+        return {
+            "search/best_value": max(values),
+            "search/buffer_size": len(values),
+            "search/buffer_mean": float(np.mean(values)),
+        }
+
 
 class FixedSampler(StateSampler):
     """Fixed distribution sampler - always returns same state, never updates."""
