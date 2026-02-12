@@ -12,6 +12,7 @@ from tinker_cookbook.recipes.ttt.state import (
     GpuModeState,
     AleBenchState,
     ErdosState,
+    MleBenchState,
     DenoisingState,
     State,
     state_from_dict,
@@ -183,6 +184,8 @@ def create_initial_state(env_type: str, initial_exp_type: str, budget_s: int = 1
         return AleBenchState(timestep=timestep, code="", value=initial_value)
     elif env_type == "erdos":
         return ErdosState(timestep=timestep, code="", value=initial_value, c5_bound=None, construction=None)
+    elif env_type == "mle_bench":
+        return MleBenchState(timestep=timestep, code="", value=0.0, raw_score=None, medal="none")
     elif env_type == "denoising":
         from tasks.denoising.task import MAGIC_FUNC
         return DenoisingState(timestep=timestep, code=MAGIC_FUNC, value=0.24, mse=0.2316, poisson=0.0370)
@@ -292,6 +295,17 @@ class GreedySampler(StateSampler):
             self._top_states = []
             self._current_step = step
             self._load(step)
+
+    def get_sample_stats(self) -> dict:
+        with self._lock:
+            values = [s.value for s in self._top_states if s.value is not None]
+        if not values:
+            return {}
+        return {
+            "search/best_value": max(values),
+            "search/buffer_size": len(values),
+            "search/buffer_mean": float(np.mean(values)),
+        }
 
 
 class FixedSampler(StateSampler):
