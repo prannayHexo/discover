@@ -91,6 +91,9 @@ class CLIConfig:
     # Local model path (avoids HuggingFace API rate limits)
     local_model_path: str | None = None
 
+    # JSONL trajectory logging path (None = disabled)
+    trajectory_log_path: str | None = "/tmp/discover-search/tinker"
+
 
 def get_dataset_builder(
     dataset_path: str,
@@ -252,6 +255,7 @@ async def cli_main(cli_config: CLIConfig):
         two_phase_sampling=cli_config.two_phase_sampling,
         phase1_max_tokens=cli_config.phase1_max_tokens,
         local_model_path=cli_config.local_model_path,
+        trajectory_log_path=cli_config.trajectory_log_path,
     )
 
     cli_utils.check_log_dir(log_path, behavior_if_exists=cli_config.behavior_if_log_dir_exists)
