@@ -24,7 +24,6 @@ You can list all available files with `os.listdir(DATA_DIR)`.
 ## Rules
 - Define `run()` that returns a pandas DataFrame matching the sample submission format
 - The DataFrame must have the correct columns and number of rows
-- Use pandas, numpy, scikit-learn, xgboost, lightgbm, scipy, or other standard ML libraries
 - Make all helper functions top level, no closures or lambdas
 - No network IO
 - `DATA_DIR` is pre-defined as a global variable pointing to the competition data directory

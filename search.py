@@ -25,6 +25,7 @@ logging.getLogger("ray").setLevel(logging.ERROR)
 
 import ray
 import anthropic
+import openai
 
 from tinker_cookbook.recipes.ttt.sampler import create_initial_state, create_sampler
 from tinker_cookbook.recipes.ttt.state import ErdosState, MleBenchState
@@ -253,6 +254,8 @@ def main():
     parser.add_argument("--max_tokens", type=int, default=26000, help="Max tokens for LLM response")
     parser.add_argument("--wandb_project", default="discover-ttt", help="W&B project (set to '' to disable)")
     parser.add_argument("--wandb_name", default=None, help="W&B run name")
+    parser.add_argument("--base_url", default=None, help="OpenAI-compatible base URL (e.g. https://openrouter.ai/api/v1). When set, uses OpenAI client instead of Anthropic.")
+    parser.add_argument("--api_key_env", default=None, help="Env var name for API key when using --base_url (default: auto-detect from URL)")
     args = parser.parse_args()
 
     # Defaults
@@ -281,8 +284,23 @@ def main():
     if not ray.is_initialized():
         ray.init(ignore_reinit_error=True, configure_logging=False)
 
-    # Init Anthropic
-    client = anthropic.Anthropic()
+    # Init LLM client
+    use_openai = args.base_url is not None
+    if use_openai:
+        # Auto-detect API key env var from base URL
+        if args.api_key_env:
+            api_key = os.environ[args.api_key_env]
+        elif "openrouter" in args.base_url:
+            api_key = os.environ["OPENROUTER_API_KEY"]
+        elif "fireworks" in args.base_url:
+            api_key = os.environ["FIREWORKS_API_KEY"]
+        elif "together" in args.base_url:
+            api_key = os.environ["TOGETHER_API_KEY"]
+        else:
+            api_key = os.environ.get("OPENAI_API_KEY", "")
+        client = openai.OpenAI(base_url=args.base_url, api_key=api_key)
+    else:
+        client = anthropic.Anthropic()
 
     # Create sampler + initial state
     sampler = create_sampler(
@@ -325,17 +343,30 @@ def main():
             build_prompt = PROMPT_BUILDERS[args.env]
             prompt = build_prompt(state, args.budget_s, args.num_cpus, args.problem_idx)
 
-            # 2. Call Anthropic (stream to handle long responses)
+            # 2. Call LLM (stream to handle long responses)
             t0 = time.time()
             content = ""
-            with client.messages.stream(
-                model=args.model,
-                messages=[{"role": "user", "content": prompt}],
-                temperature=args.temperature,
-                max_tokens=args.max_tokens,
-            ) as stream:
-                for text in stream.text_stream:
-                    content += text
+            if use_openai:
+                stream = client.chat.completions.create(
+                    model=args.model,
+                    messages=[{"role": "user", "content": prompt}],
+                    temperature=args.temperature,
+                    max_tokens=args.max_tokens,
+                    stream=True,
+                )
+                for chunk in stream:
+                    delta = chunk.choices[0].delta.content
+                    if delta:
+                        content += delta
+            else:
+                with client.messages.stream(
+                    model=args.model,
+                    messages=[{"role": "user", "content": prompt}],
+                    temperature=args.temperature,
+                    max_tokens=args.max_tokens,
+                ) as stream:
+                    for text in stream.text_stream:
+                        content += text
             llm_time = time.time() - t0
 
             # 3. Parse code
