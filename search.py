@@ -2,11 +2,11 @@
 Inference-only search loop for Discover benchmarks.
 
 Reuses the existing verify/score/sampler infrastructure but replaces
-LLM training with plain OpenAI API calls. No gradient updates — just
+LLM training with plain Anthropic API calls. No gradient updates — just
 the search loop (prompt → generate → execute → score → buffer → repeat).
 
 Usage:
-    python search.py --env erdos --rounds 5 --samples 4 --model gpt-4o
+    python search.py --env mle_bench --rounds 15 --samples 4 --model claude-sonnet-4-5-20250929
 """
 
 import argparse
@@ -24,7 +24,8 @@ os.environ.setdefault("RAY_METRICS_EXPORT_PORT", "0")
 logging.getLogger("ray").setLevel(logging.ERROR)
 
 import ray
-from openai import OpenAI
+import anthropic
+import openai
 
 from tinker_cookbook.recipes.ttt.sampler import create_initial_state, create_sampler
 from tinker_cookbook.recipes.ttt.state import ErdosState, MleBenchState
@@ -241,18 +242,20 @@ def main():
     parser = argparse.ArgumentParser(description="Inference-only search for Discover benchmarks")
     parser.add_argument("--env", required=True, choices=["erdos", "mle_bench"], help="Benchmark to run")
     parser.add_argument("--problem_idx", default=None, help="Problem ID (e.g. 'erdos', 'spaceship-titanic')")
-    parser.add_argument("--model", default="gpt-4o", help="OpenAI model to use")
-    parser.add_argument("--rounds", type=int, default=5, help="Number of search rounds")
-    parser.add_argument("--samples", type=int, default=4, help="Samples per round")
+    parser.add_argument("--model", default="claude-sonnet-4-5-20250929", help="Anthropic model to use")
+    parser.add_argument("--rounds", type=int, default=15, help="Number of search rounds")
+    parser.add_argument("--samples", type=int, default=10, help="Samples per round")
     parser.add_argument("--sampler", default="greedy", choices=["greedy", "puct"], help="Sampler type")
-    parser.add_argument("--timeout", type=int, default=60, help="Code execution timeout (seconds)")
-    parser.add_argument("--budget_s", type=int, default=30, help="Time budget passed to generated code")
-    parser.add_argument("--num_cpus", type=int, default=1, help="CPUs per task")
+    parser.add_argument("--timeout", type=int, default=300, help="Code execution timeout (seconds)")
+    parser.add_argument("--budget_s", type=int, default=1000, help="Time budget passed to generated code")
+    parser.add_argument("--num_cpus", type=int, default=2, help="CPUs per task")
     parser.add_argument("--log_path", default="/tmp/discover-search", help="Log directory")
-    parser.add_argument("--temperature", type=float, default=0.7, help="LLM sampling temperature")
-    parser.add_argument("--max_tokens", type=int, default=16000, help="Max tokens for LLM response")
+    parser.add_argument("--temperature", type=float, default=1.0, help="LLM sampling temperature")
+    parser.add_argument("--max_tokens", type=int, default=26000, help="Max tokens for LLM response")
     parser.add_argument("--wandb_project", default="discover-ttt", help="W&B project (set to '' to disable)")
     parser.add_argument("--wandb_name", default=None, help="W&B run name")
+    parser.add_argument("--base_url", default=None, help="OpenAI-compatible base URL (e.g. https://openrouter.ai/api/v1). When set, uses OpenAI client instead of Anthropic.")
+    parser.add_argument("--api_key_env", default=None, help="Env var name for API key when using --base_url (default: auto-detect from URL)")
     args = parser.parse_args()
 
     # Defaults
@@ -281,8 +284,23 @@ def main():
     if not ray.is_initialized():
         ray.init(ignore_reinit_error=True, configure_logging=False)
 
-    # Init OpenAI
-    client = OpenAI()
+    # Init LLM client
+    use_openai = args.base_url is not None
+    if use_openai:
+        # Auto-detect API key env var from base URL
+        if args.api_key_env:
+            api_key = os.environ[args.api_key_env]
+        elif "openrouter" in args.base_url:
+            api_key = os.environ["OPENROUTER_API_KEY"]
+        elif "fireworks" in args.base_url:
+            api_key = os.environ["FIREWORKS_API_KEY"]
+        elif "together" in args.base_url:
+            api_key = os.environ["TOGETHER_API_KEY"]
+        else:
+            api_key = os.environ.get("OPENAI_API_KEY", "")
+        client = openai.OpenAI(base_url=args.base_url, api_key=api_key)
+    else:
+        client = anthropic.Anthropic()
 
     # Create sampler + initial state
     sampler = create_sampler(
@@ -325,16 +343,31 @@ def main():
             build_prompt = PROMPT_BUILDERS[args.env]
             prompt = build_prompt(state, args.budget_s, args.num_cpus, args.problem_idx)
 
-            # 2. Call OpenAI
+            # 2. Call LLM (stream to handle long responses)
             t0 = time.time()
-            response = client.chat.completions.create(
-                model=args.model,
-                messages=[{"role": "user", "content": prompt}],
-                temperature=args.temperature,
-                max_tokens=args.max_tokens,
-            )
+            content = ""
+            if use_openai:
+                stream = client.chat.completions.create(
+                    model=args.model,
+                    messages=[{"role": "user", "content": prompt}],
+                    temperature=args.temperature,
+                    max_tokens=args.max_tokens,
+                    stream=True,
+                )
+                for chunk in stream:
+                    delta = chunk.choices[0].delta.content
+                    if delta:
+                        content += delta
+            else:
+                with client.messages.stream(
+                    model=args.model,
+                    messages=[{"role": "user", "content": prompt}],
+                    temperature=args.temperature,
+                    max_tokens=args.max_tokens,
+                ) as stream:
+                    for text in stream.text_stream:
+                        content += text
             llm_time = time.time() - t0
-            content = response.choices[0].message.content
 
             # 3. Parse code
             parsed_code = extract_code(content)

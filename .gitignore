@@ -8,6 +8,8 @@ __pycache__/
 
 tinker_log/
 .vscode/
+catboost_info/
+cache/
 
 openevolve_output*/
 
