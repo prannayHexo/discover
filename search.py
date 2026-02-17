@@ -30,6 +30,7 @@ import openai
 from tinker_cookbook.recipes.ttt.sampler import create_initial_state, create_sampler
 from tinker_cookbook.recipes.ttt.state import ErdosState, MleBenchState
 from tinker_cookbook.utils import ml_log
+from tinker_cookbook.utils.action_log import log_action
 
 
 # ---------------------------------------------------------------------------
@@ -249,7 +250,7 @@ def main():
     parser.add_argument("--timeout", type=int, default=300, help="Code execution timeout (seconds)")
     parser.add_argument("--budget_s", type=int, default=1000, help="Time budget passed to generated code")
     parser.add_argument("--num_cpus", type=int, default=2, help="CPUs per task")
-    parser.add_argument("--log_path", default="/tmp/discover-search", help="Log directory")
+    parser.add_argument("--log_path", default="/Users/pran-ker/Developer/discover/logs", help="Log directory")
     parser.add_argument("--temperature", type=float, default=1.0, help="LLM sampling temperature")
     parser.add_argument("--max_tokens", type=int, default=26000, help="Max tokens for LLM response")
     parser.add_argument("--wandb_project", default="discover-ttt", help="W&B project (set to '' to disable)")
@@ -375,7 +376,11 @@ def main():
                 total_errors += 1
                 # Log failed sample
                 sample_log = {
+                    "timestamp": time.time(),
+                    "action_id": f"run_{run_id}_{round_idx}_{sample_idx}",
+                    "source": "search",
                     "round": round_idx, "sample": sample_idx,
+                    "train_step": None,
                     "model": args.model,
                     "temperature": args.temperature,
                     "max_tokens": args.max_tokens,
@@ -386,8 +391,10 @@ def main():
                     "status": "format_error",
                     "result": None,
                     "performance": None,
+                    "reward": None,
                     "is_new_best": False,
                     "best_value_so_far": best_value,
+                    "parent_state_id": getattr(state, 'id', None),
                     "parent_state_value": state.value,
                     "parent_state_timestep": state.timestep,
                     "parent_values_history": state.parent_values,
@@ -398,6 +405,7 @@ def main():
                 }
                 with open(run_log_file, "a") as f:
                     f.write(json.dumps(sample_log) + "\n")
+                log_action(args.log_path, sample_log)
                 print(f"  [{sample_idx}] \u2717 Format error (no code block) [{llm_time:.1f}s LLM]")
                 continue
 
@@ -433,7 +441,11 @@ def main():
 
                 # Log valid sample
                 sample_log = {
+                    "timestamp": time.time(),
+                    "action_id": f"run_{run_id}_{round_idx}_{sample_idx}",
+                    "source": "search",
                     "round": round_idx, "sample": sample_idx,
+                    "train_step": None,
                     "model": args.model,
                     "temperature": args.temperature,
                     "max_tokens": args.max_tokens,
@@ -444,8 +456,10 @@ def main():
                     "status": "valid",
                     "result": detail,
                     "performance": performance,
+                    "reward": performance,
                     "is_new_best": is_new_best,
                     "best_value_so_far": best_value,
+                    "parent_state_id": getattr(state, 'id', None),
                     "parent_state_value": state.value,
                     "parent_state_timestep": state.timestep,
                     "parent_values_history": state.parent_values,
@@ -456,6 +470,7 @@ def main():
                 }
                 with open(run_log_file, "a") as f:
                     f.write(json.dumps(sample_log, default=str) + "\n")
+                log_action(args.log_path, sample_log)
 
                 best_tag = " | NEW BEST" if is_new_best else ""
                 print(f"  [{sample_idx}] \u2713 {detail} | reward={performance:.4f}{best_tag} [{llm_time:.1f}s LLM, {verify_time:.1f}s verify]")
@@ -463,7 +478,11 @@ def main():
                 total_errors += 1
                 # Log failed sample
                 sample_log = {
+                    "timestamp": time.time(),
+                    "action_id": f"run_{run_id}_{round_idx}_{sample_idx}",
+                    "source": "search",
                     "round": round_idx, "sample": sample_idx,
+                    "train_step": None,
                     "model": args.model,
                     "temperature": args.temperature,
                     "max_tokens": args.max_tokens,
@@ -474,8 +493,10 @@ def main():
                     "status": "fail",
                     "result": detail,
                     "performance": None,
+                    "reward": None,
                     "is_new_best": False,
                     "best_value_so_far": best_value,
+                    "parent_state_id": getattr(state, 'id', None),
                     "parent_state_value": state.value,
                     "parent_state_timestep": state.timestep,
                     "parent_values_history": state.parent_values,
@@ -486,6 +507,7 @@ def main():
                 }
                 with open(run_log_file, "a") as f:
                     f.write(json.dumps(sample_log, default=str) + "\n")
+                log_action(args.log_path, sample_log)
                 print(f"  [{sample_idx}] \u2717 {detail} [{llm_time:.1f}s LLM, {verify_time:.1f}s verify]")
 
         # Trim sampler buffers and write best states to JSONL (not experience JSONs)
