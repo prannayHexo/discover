@@ -328,13 +328,13 @@ def main():
         print(f"  W&B: {ml_logger.get_logger_url()}")
     print(f"{'='*60}\n")
 
-    for round_idx in range(1, args.rounds + 1):
+    for round_idx in range(args.rounds):
         states = sampler.sample_states(args.samples)
         round_best = None
         round_best_detail = ""
 
         state_val = states[0].value if states[0].value is not None else "none"
-        print(f"Round {round_idx}/{args.rounds} | Sampling {args.samples} candidates from state (value={state_val})")
+        print(f"Round {round_idx}/{args.rounds - 1} | Sampling {args.samples} candidates from state (value={state_val})")
 
         for sample_idx, state in enumerate(states, 1):
             total_calls += 1
