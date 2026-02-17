@@ -6,7 +6,7 @@ LLM training with plain Anthropic API calls. No gradient updates — just
 the search loop (prompt → generate → execute → score → buffer → repeat).
 
 Usage:
-    python search.py --env mle_bench --rounds 15 --samples 4 --model claude-sonnet-4-5-20250929
+    python search.py --env mle_bench --num_epochs 15 --groups_per_batch 4 --model_name claude-sonnet-4-5-20250929
 """
 
 import argparse
@@ -243,13 +243,15 @@ def main():
     parser = argparse.ArgumentParser(description="Inference-only search for Discover benchmarks")
     parser.add_argument("--env", required=True, choices=["erdos", "mle_bench"], help="Benchmark to run")
     parser.add_argument("--problem_idx", default=None, help="Problem ID (e.g. 'erdos', 'spaceship-titanic')")
-    parser.add_argument("--model", default="claude-sonnet-4-5-20250929", help="Anthropic model to use")
-    parser.add_argument("--rounds", type=int, default=15, help="Number of search rounds")
-    parser.add_argument("--samples", type=int, default=10, help="Samples per round")
-    parser.add_argument("--sampler", default="greedy", choices=["greedy", "puct"], help="Sampler type")
-    parser.add_argument("--timeout", type=int, default=300, help="Code execution timeout (seconds)")
+    parser.add_argument("--model_name", default="claude-sonnet-4-5-20250929", help="Anthropic model to use")
+    parser.add_argument("--num_epochs", type=int, default=15, help="Number of search rounds")
+    parser.add_argument("--groups_per_batch", type=int, default=10, help="Groups per round")
+    parser.add_argument("--group_size", type=int, default=1, help="Samples per group (total samples/round = groups_per_batch * group_size)")
+    parser.add_argument("--sampler_type", default="greedy", choices=["greedy", "puct"], help="Sampler type")
+    parser.add_argument("--initial_exp_type", default="none", help="Initial experience type for sampler")
+    parser.add_argument("--eval_timeout", type=int, default=300, help="Code execution timeout (seconds)")
     parser.add_argument("--budget_s", type=int, default=1000, help="Time budget passed to generated code")
-    parser.add_argument("--num_cpus", type=int, default=2, help="CPUs per task")
+    parser.add_argument("--num_cpus_per_task", type=int, default=2, help="CPUs per task")
     parser.add_argument("--log_path", default="/Users/pran-ker/Developer/discover/logs", help="Log directory")
     parser.add_argument("--temperature", type=float, default=1.0, help="LLM sampling temperature")
     parser.add_argument("--max_tokens", type=int, default=26000, help="Max tokens for LLM response")
@@ -258,6 +260,9 @@ def main():
     parser.add_argument("--base_url", default=None, help="OpenAI-compatible base URL (e.g. https://openrouter.ai/api/v1). When set, uses OpenAI client instead of Anthropic.")
     parser.add_argument("--api_key_env", default=None, help="Env var name for API key when using --base_url (default: auto-detect from URL)")
     args = parser.parse_args()
+
+    # Compute total samples per round
+    total_samples = args.groups_per_batch * args.group_size
 
     # Defaults
     if args.problem_idx is None:
@@ -305,12 +310,12 @@ def main():
 
     # Create sampler + initial state
     sampler = create_sampler(
-        args.sampler,
+        args.sampler_type,
         args.log_path,
         env_type=args.env,
-        initial_exp_type="none",
-        batch_size=args.samples,
-        group_size=1,
+        initial_exp_type=args.initial_exp_type,
+        batch_size=total_samples,
+        group_size=args.group_size,
     )
 
     best_value = None
@@ -321,194 +326,201 @@ def main():
 
     print(f"\n{'='*60}")
     print(f"  Discover Search: {args.env} ({args.problem_idx})")
-    print(f"  Model: {args.model} | Rounds: {args.rounds} | Samples/round: {args.samples}")
-    print(f"  Sampler: {args.sampler} | Timeout: {args.timeout}s | Budget: {args.budget_s}s")
+    print(f"  Model: {args.model_name} | Rounds: {args.num_epochs} | Samples/round: {total_samples}")
+    print(f"  Sampler: {args.sampler_type} | Timeout: {args.eval_timeout}s | Budget: {args.budget_s}s")
     print(f"  All samples: {run_log_file}")
     print(f"  Best states: {best_log_file}")
     if ml_logger.get_logger_url():
         print(f"  W&B: {ml_logger.get_logger_url()}")
     print(f"{'='*60}\n")
 
-    for round_idx in range(args.rounds):
-        states = sampler.sample_states(args.samples)
+    for round_idx in range(args.num_epochs):
+        parent_states = sampler.sample_states(args.groups_per_batch)
         round_best = None
         round_best_detail = ""
 
-        state_val = states[0].value if states[0].value is not None else "none"
-        print(f"Round {round_idx}/{args.rounds - 1} | Sampling {args.samples} candidates from state (value={state_val})")
+        parent_vals = [s.value if s.value is not None else "none" for s in parent_states]
+        print(f"Round {round_idx}/{args.num_epochs - 1} | Sampling {total_samples} candidates ({args.groups_per_batch} parents x {args.group_size} siblings) | parent values={parent_vals}")
 
-        for sample_idx, state in enumerate(states, 1):
-            total_calls += 1
+        for group_idx, parent_state in enumerate(parent_states):
+            for sibling_idx in range(args.group_size):
+                state = parent_state
+                sample_idx = group_idx * args.group_size + sibling_idx + 1
+                total_calls += 1
 
-            # 1. Build prompt
-            build_prompt = PROMPT_BUILDERS[args.env]
-            prompt = build_prompt(state, args.budget_s, args.num_cpus, args.problem_idx)
+                # 1. Build prompt
+                build_prompt = PROMPT_BUILDERS[args.env]
+                prompt = build_prompt(state, args.budget_s, args.num_cpus_per_task, args.problem_idx)
 
-            # 2. Call LLM (stream to handle long responses)
-            t0 = time.time()
-            content = ""
-            if use_openai:
-                stream = client.chat.completions.create(
-                    model=args.model,
-                    messages=[{"role": "user", "content": prompt}],
-                    temperature=args.temperature,
-                    max_tokens=args.max_tokens,
-                    stream=True,
+                # 2. Call LLM (stream to handle long responses)
+                t0 = time.time()
+                content = ""
+                if use_openai:
+                    stream = client.chat.completions.create(
+                        model=args.model_name,
+                        messages=[{"role": "user", "content": prompt}],
+                        temperature=args.temperature,
+                        max_tokens=args.max_tokens,
+                        stream=True,
+                    )
+                    for chunk in stream:
+                        delta = chunk.choices[0].delta.content
+                        if delta:
+                            content += delta
+                else:
+                    with client.messages.stream(
+                        model=args.model_name,
+                        messages=[{"role": "user", "content": prompt}],
+                        temperature=args.temperature,
+                        max_tokens=args.max_tokens,
+                    ) as stream:
+                        for text in stream.text_stream:
+                            content += text
+                llm_time = time.time() - t0
+
+                # 3. Parse code
+                parsed_code = extract_code(content)
+                if not parsed_code:
+                    total_errors += 1
+                    if hasattr(sampler, 'record_failed_rollout'):
+                        sampler.record_failed_rollout(state)
+                    # Log failed sample
+                    sample_log = {
+                        "timestamp": time.time(),
+                        "action_id": f"run_{run_id}_{round_idx}_{sample_idx}",
+                        "source": "search",
+                        "round": round_idx, "sample": sample_idx,
+                        "train_step": None,
+                        "model": args.model_name,
+                        "temperature": args.temperature,
+                        "max_tokens": args.max_tokens,
+                        "env": args.env,
+                        "problem_idx": args.problem_idx,
+                        "llm_time_s": round(llm_time, 1),
+                        "verify_time_s": None,
+                        "status": "format_error",
+                        "result": None,
+                        "performance": None,
+                        "reward": None,
+                        "is_new_best": False,
+                        "best_value_so_far": best_value,
+                        "parent_state_id": getattr(state, 'id', None),
+                        "parent_state_value": state.value,
+                        "parent_state_timestep": state.timestep,
+                        "parent_values_history": state.parent_values,
+                        "prompt": prompt,
+                        "full_response": content,
+                        "parsed_code": None,
+                        "verify_output": None,
+                    }
+                    with open(run_log_file, "a") as f:
+                        f.write(json.dumps(sample_log) + "\n")
+                    log_action(args.log_path, sample_log)
+                    print(f"  [{sample_idx}] \u2717 Format error (no code block) [{llm_time:.1f}s LLM]")
+                    continue
+
+                # 4. Verify via Ray pipeline
+                t1 = time.time()
+                outs = verify(
+                    args.env, parsed_code, round_idx * 100 + sample_idx,
+                    args.num_cpus_per_task, args.eval_timeout, args.log_path, state, args.problem_idx,
                 )
-                for chunk in stream:
-                    delta = chunk.choices[0].delta.content
-                    if delta:
-                        content += delta
-            else:
-                with client.messages.stream(
-                    model=args.model,
-                    messages=[{"role": "user", "content": prompt}],
-                    temperature=args.temperature,
-                    max_tokens=args.max_tokens,
-                ) as stream:
-                    for text in stream.text_stream:
-                        content += text
-            llm_time = time.time() - t0
+                verify_time = time.time() - t1
 
-            # 3. Parse code
-            parsed_code = extract_code(content)
-            if not parsed_code:
-                total_errors += 1
-                # Log failed sample
-                sample_log = {
-                    "timestamp": time.time(),
-                    "action_id": f"run_{run_id}_{round_idx}_{sample_idx}",
-                    "source": "search",
-                    "round": round_idx, "sample": sample_idx,
-                    "train_step": None,
-                    "model": args.model,
-                    "temperature": args.temperature,
-                    "max_tokens": args.max_tokens,
-                    "env": args.env,
-                    "problem_idx": args.problem_idx,
-                    "llm_time_s": round(llm_time, 1),
-                    "verify_time_s": None,
-                    "status": "format_error",
-                    "result": None,
-                    "performance": None,
-                    "reward": None,
-                    "is_new_best": False,
-                    "best_value_so_far": best_value,
-                    "parent_state_id": getattr(state, 'id', None),
-                    "parent_state_value": state.value,
-                    "parent_state_timestep": state.timestep,
-                    "parent_values_history": state.parent_values,
-                    "prompt": prompt,
-                    "full_response": content,
-                    "parsed_code": None,
-                    "verify_output": None,
-                }
-                with open(run_log_file, "a") as f:
-                    f.write(json.dumps(sample_log) + "\n")
-                log_action(args.log_path, sample_log)
-                print(f"  [{sample_idx}] \u2717 Format error (no code block) [{llm_time:.1f}s LLM]")
-                continue
+                correctness = outs.get("correctness", 0.0)
+                detail = format_result(args.env, outs)
 
-            # 4. Verify via Ray pipeline
-            t1 = time.time()
-            outs = verify(
-                args.env, parsed_code, round_idx * 100 + sample_idx,
-                args.num_cpus, args.timeout, args.log_path, state, args.problem_idx,
-            )
-            verify_time = time.time() - t1
+                if correctness > 0:
+                    total_valid += 1
+                    performance = outs.get("performance", 0.0)
 
-            correctness = outs.get("correctness", 0.0)
-            detail = format_result(args.env, outs)
+                    # Check if new best
+                    is_new_best = False
+                    if best_value is None or performance > best_value:
+                        best_value = performance
+                        best_detail = detail
+                        is_new_best = True
+                    if round_best is None or performance > round_best:
+                        round_best = performance
+                        round_best_detail = detail
 
-            if correctness > 0:
-                total_valid += 1
-                performance = outs.get("performance", 0.0)
+                    # 5. Create next state + update sampler
+                    next_state = create_next_state(args.env, round_idx, parsed_code, outs, state)
+                    if next_state is not None:
+                        sampler.update_states([next_state], [state], save=False)
 
-                # Check if new best
-                is_new_best = False
-                if best_value is None or performance > best_value:
-                    best_value = performance
-                    best_detail = detail
-                    is_new_best = True
-                if round_best is None or performance > round_best:
-                    round_best = performance
-                    round_best_detail = detail
+                    # Log valid sample
+                    sample_log = {
+                        "timestamp": time.time(),
+                        "action_id": f"run_{run_id}_{round_idx}_{sample_idx}",
+                        "source": "search",
+                        "round": round_idx, "sample": sample_idx,
+                        "train_step": None,
+                        "model": args.model_name,
+                        "temperature": args.temperature,
+                        "max_tokens": args.max_tokens,
+                        "env": args.env,
+                        "problem_idx": args.problem_idx,
+                        "llm_time_s": round(llm_time, 1),
+                        "verify_time_s": round(verify_time, 1),
+                        "status": "valid",
+                        "result": detail,
+                        "performance": performance,
+                        "reward": performance,
+                        "is_new_best": is_new_best,
+                        "best_value_so_far": best_value,
+                        "parent_state_id": getattr(state, 'id', None),
+                        "parent_state_value": state.value,
+                        "parent_state_timestep": state.timestep,
+                        "parent_values_history": state.parent_values,
+                        "prompt": prompt,
+                        "full_response": content,
+                        "parsed_code": parsed_code,
+                        "verify_output": outs,
+                    }
+                    with open(run_log_file, "a") as f:
+                        f.write(json.dumps(sample_log, default=str) + "\n")
+                    log_action(args.log_path, sample_log)
 
-                # 5. Create next state + update sampler
-                next_state = create_next_state(args.env, round_idx, parsed_code, outs, state)
-                if next_state is not None:
-                    sampler.update_states([next_state], [state], save=False)
-
-                # Log valid sample
-                sample_log = {
-                    "timestamp": time.time(),
-                    "action_id": f"run_{run_id}_{round_idx}_{sample_idx}",
-                    "source": "search",
-                    "round": round_idx, "sample": sample_idx,
-                    "train_step": None,
-                    "model": args.model,
-                    "temperature": args.temperature,
-                    "max_tokens": args.max_tokens,
-                    "env": args.env,
-                    "problem_idx": args.problem_idx,
-                    "llm_time_s": round(llm_time, 1),
-                    "verify_time_s": round(verify_time, 1),
-                    "status": "valid",
-                    "result": detail,
-                    "performance": performance,
-                    "reward": performance,
-                    "is_new_best": is_new_best,
-                    "best_value_so_far": best_value,
-                    "parent_state_id": getattr(state, 'id', None),
-                    "parent_state_value": state.value,
-                    "parent_state_timestep": state.timestep,
-                    "parent_values_history": state.parent_values,
-                    "prompt": prompt,
-                    "full_response": content,
-                    "parsed_code": parsed_code,
-                    "verify_output": outs,
-                }
-                with open(run_log_file, "a") as f:
-                    f.write(json.dumps(sample_log, default=str) + "\n")
-                log_action(args.log_path, sample_log)
-
-                best_tag = " | NEW BEST" if is_new_best else ""
-                print(f"  [{sample_idx}] \u2713 {detail} | reward={performance:.4f}{best_tag} [{llm_time:.1f}s LLM, {verify_time:.1f}s verify]")
-            else:
-                total_errors += 1
-                # Log failed sample
-                sample_log = {
-                    "timestamp": time.time(),
-                    "action_id": f"run_{run_id}_{round_idx}_{sample_idx}",
-                    "source": "search",
-                    "round": round_idx, "sample": sample_idx,
-                    "train_step": None,
-                    "model": args.model,
-                    "temperature": args.temperature,
-                    "max_tokens": args.max_tokens,
-                    "env": args.env,
-                    "problem_idx": args.problem_idx,
-                    "llm_time_s": round(llm_time, 1),
-                    "verify_time_s": round(verify_time, 1),
-                    "status": "fail",
-                    "result": detail,
-                    "performance": None,
-                    "reward": None,
-                    "is_new_best": False,
-                    "best_value_so_far": best_value,
-                    "parent_state_id": getattr(state, 'id', None),
-                    "parent_state_value": state.value,
-                    "parent_state_timestep": state.timestep,
-                    "parent_values_history": state.parent_values,
-                    "prompt": prompt,
-                    "full_response": content,
-                    "parsed_code": parsed_code,
-                    "verify_output": outs,
-                }
-                with open(run_log_file, "a") as f:
-                    f.write(json.dumps(sample_log, default=str) + "\n")
-                log_action(args.log_path, sample_log)
-                print(f"  [{sample_idx}] \u2717 {detail} [{llm_time:.1f}s LLM, {verify_time:.1f}s verify]")
+                    best_tag = " | NEW BEST" if is_new_best else ""
+                    print(f"  [{sample_idx}] \u2713 {detail} | reward={performance:.4f}{best_tag} [{llm_time:.1f}s LLM, {verify_time:.1f}s verify]")
+                else:
+                    total_errors += 1
+                    if hasattr(sampler, 'record_failed_rollout'):
+                        sampler.record_failed_rollout(state)
+                    # Log failed sample
+                    sample_log = {
+                        "timestamp": time.time(),
+                        "action_id": f"run_{run_id}_{round_idx}_{sample_idx}",
+                        "source": "search",
+                        "round": round_idx, "sample": sample_idx,
+                        "train_step": None,
+                        "model": args.model_name,
+                        "temperature": args.temperature,
+                        "max_tokens": args.max_tokens,
+                        "env": args.env,
+                        "problem_idx": args.problem_idx,
+                        "llm_time_s": round(llm_time, 1),
+                        "verify_time_s": round(verify_time, 1),
+                        "status": "fail",
+                        "result": detail,
+                        "performance": None,
+                        "reward": None,
+                        "is_new_best": False,
+                        "best_value_so_far": best_value,
+                        "parent_state_id": getattr(state, 'id', None),
+                        "parent_state_value": state.value,
+                        "parent_state_timestep": state.timestep,
+                        "parent_values_history": state.parent_values,
+                        "prompt": prompt,
+                        "full_response": content,
+                        "parsed_code": parsed_code,
+                        "verify_output": outs,
+                    }
+                    with open(run_log_file, "a") as f:
+                        f.write(json.dumps(sample_log, default=str) + "\n")
+                    log_action(args.log_path, sample_log)
+                    print(f"  [{sample_idx}] \u2717 {detail} [{llm_time:.1f}s LLM, {verify_time:.1f}s verify]")
 
         # Trim sampler buffers and write best states to JSONL (not experience JSONs)
         if hasattr(sampler, '_lock'):
