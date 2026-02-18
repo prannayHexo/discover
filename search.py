@@ -286,6 +286,15 @@ def main():
         do_configure_logging_module=False,
     )
 
+    # Tell wandb to use search/round as the x-axis for all search/* metrics
+    try:
+        import wandb
+        if wandb.run is not None:
+            wandb.define_metric("search/round")
+            wandb.define_metric("search/*", step_metric="search/round")
+    except ImportError:
+        pass
+
     # Init Ray for local CPU verification
     if not ray.is_initialized():
         ray.init(ignore_reinit_error=True, configure_logging=False)
@@ -547,13 +556,14 @@ def main():
 
         # Log round metrics to wandb
         round_metrics = {
+            "search/round": round_idx,
             "search/best_value": best_value if best_value is not None else 0.0,
             "search/round_best": round_best if round_best is not None else 0.0,
             "search/total_valid": total_valid,
             "search/total_errors": total_errors,
             "search/total_calls": total_calls,
         }
-        ml_logger.log_metrics(round_metrics, step=round_idx)
+        ml_logger.log_metrics(round_metrics)
 
         print(f"  Best this round: {round_best_detail or 'none'}")
         print()
