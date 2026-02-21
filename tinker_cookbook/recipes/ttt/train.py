@@ -92,7 +92,7 @@ class CLIConfig:
     local_model_path: str | None = None
 
     # JSONL trajectory logging path (None = disabled)
-    trajectory_log_path: str | None = "/Users/pran-ker/Developer/discover/logs"
+    trajectory_log_path: str | None = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "..", "logs")
 
 
 def get_dataset_builder(
@@ -192,7 +192,7 @@ async def cli_main(cli_config: CLIConfig):
     if cli_config.log_path is not None:
         log_path = cli_config.log_path
     else:
-        log_path = f"/Users/pran-ker/Developer/discover/logs/{run_name}"
+        log_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "..", "logs", run_name)
     log_file = os.path.join(log_path, "train.log")
 
     if cli_config.wandb_name is not None:
