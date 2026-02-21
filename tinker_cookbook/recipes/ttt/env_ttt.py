@@ -287,12 +287,14 @@ class BaseTTTEnv(ProblemEnv, ABC):
         correct_format = float(parse_success) and float(self.check_format(parsed_code))
         
         # Verify code
+        t_verify = time.time()
         outs = await self.check_answer(parsed_code, step_idx)
+        verify_time_s = time.time() - t_verify
         score = outs.get("score", 0.0)
         correctness = outs.get("correctness", 0.0)
         performance = outs.get("performance")
         msg = outs.get("msg", "")
-        
+
         # Compute reward
         reward = self._compute_reward(outs, correctness)
         
@@ -306,7 +308,12 @@ class BaseTTTEnv(ProblemEnv, ABC):
         
         # Build metrics
         metrics = self._build_metrics(outs, correct_format, message, parsed_code)
-        
+        metrics["verify_time_s"] = round(verify_time_s, 2)
+        metrics["parent_state_id"] = getattr(self.initial_state, 'id', None)
+        metrics["parent_state_value"] = self.initial_state.value
+        metrics["parent_state_timestep"] = self.initial_state.timestep
+        metrics["parent_values_history"] = self.initial_state.parent_values
+
         # Create step result
         step_result = StepResult(
             reward=reward,

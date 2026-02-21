@@ -42,6 +42,7 @@ from tinker_cookbook.rl.types import (
 )
 from tinker_cookbook.tokenizer_utils import Tokenizer
 from tinker_cookbook.utils import logtree, ml_log
+from tinker_cookbook.utils.action_log import log_action
 from tinker_cookbook.utils.misc_utils import safezip, split_list, timed, all_same
 from tinker_cookbook.utils.trace import scope, trace_init, get_scope_context
 from tinker_cookbook.utils.ml_log import WandbLogger
@@ -210,6 +211,61 @@ def _write_trajectory_logs(
                 if step_metrics:
                     payload["step_metrics"] = step_metrics
                 f.write(json.dumps(payload) + "\n")
+
+
+def _write_action_logs(
+    log_path: str | None,
+    trajectory_groups_P: Sequence[TrajectoryGroup],
+    tokenizer: Tokenizer,
+    train_step: int | None,
+    cfg_env: str | None = None,
+    cfg_model: str | None = None,
+    cfg_temperature: float | None = None,
+    cfg_max_tokens: int | None = None,
+) -> None:
+    if log_path is None:
+        return
+    for trajectory_group in trajectory_groups_P:
+        for traj_idx, (traj, final_reward, traj_metrics) in enumerate(
+            zip(
+                trajectory_group.trajectories_G,
+                trajectory_group.final_rewards_G,
+                trajectory_group.metrics_G,
+                strict=True,
+            )
+        ):
+            for step_idx, transition in enumerate(traj.transitions):
+                m = transition.metrics or {}
+                action = {
+                    "timestamp": time.time(),
+                    "action_id": f"ttt_{train_step}_{traj_idx}_{step_idx}",
+                    "source": "tinker",
+                    "env": cfg_env,
+                    "problem_idx": m.get("problem_idx"),
+                    "round": None,
+                    "sample": traj_idx,
+                    "train_step": train_step,
+                    "model": cfg_model,
+                    "temperature": cfg_temperature,
+                    "max_tokens": cfg_max_tokens,
+                    "parent_state_id": m.get("parent_state_id"),
+                    "parent_state_value": m.get("parent_state_value"),
+                    "parent_state_timestep": m.get("parent_state_timestep"),
+                    "parent_values_history": m.get("parent_values_history"),
+                    "llm_time_s": None,
+                    "verify_time_s": m.get("verify_time_s"),
+                    "status": "valid" if transition.reward > 0 else "fail",
+                    "result": m.get("result"),
+                    "performance": m.get("performance"),
+                    "reward": transition.reward,
+                    "is_new_best": m.get("is_new_best", False),
+                    "best_value_so_far": m.get("best_value_so_far"),
+                    "prompt": None,
+                    "full_response": tokenizer.decode(transition.ac.tokens),
+                    "parsed_code": m.get("parsed_code"),
+                    "verify_output": m.get("verify_output"),
+                }
+                log_action(log_path, action)
 
 
 @scope
@@ -854,6 +910,16 @@ async def do_async_training(
                 tokenizer,
                 train_step=i_batch,
             )
+            _write_action_logs(
+                cfg.trajectory_log_path,
+                [g.trajectory_group for g in wrapped_trajectory_groups],
+                tokenizer,
+                train_step=i_batch,
+                cfg_env=cfg.env,
+                cfg_model=cfg.model_name,
+                cfg_temperature=cfg.temperature,
+                cfg_max_tokens=cfg.max_tokens,
+            )
 
             if hasattr(dataset, 'flush'):
                 dataset.flush(step=i_batch + 1)
@@ -1399,12 +1465,23 @@ async def do_sync_training(
 
         # Write trajectory logs to JSONL
         taglist_P = [b.logging_tags() for b in env_group_builders_P]
+        valid_groups = [tg for tg in trajectory_groups_P if tg is not None]
         _write_trajectory_logs(
             cfg.trajectory_log_path,
-            [tg for tg in trajectory_groups_P if tg is not None],
+            valid_groups,
             [tags for tg, tags in zip(trajectory_groups_P, taglist_P) if tg is not None],
             tokenizer,
             train_step=i_batch,
+        )
+        _write_action_logs(
+            cfg.trajectory_log_path,
+            valid_groups,
+            tokenizer,
+            train_step=i_batch,
+            cfg_env=cfg.env,
+            cfg_model=cfg.model_name,
+            cfg_temperature=cfg.temperature,
+            cfg_max_tokens=cfg.max_tokens,
         )
 
         if cfg.remove_constant_reward_groups:
